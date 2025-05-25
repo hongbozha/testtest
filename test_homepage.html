@@ -1,1 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>Start experiment</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      padding: 30px;
+    }
+    canvas {
+      border: 2px solid #333;
+      margin-top: 20px;
+      cursor: crosshair;
+    }
+    #loading {
+      font-size: 20px;
+      color: #555;
+      margin-top: 40px;
+    }
+    #msg {
+      font-size: 20px;
+      color: #333;
+      margin-top: 10px;
+      margin-bottom: 10px;
+    }
+    #end-screen {
+      color: green;
+      font-size: 30px;
+      margin-top: 30px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Can you spot the change? Click it!</h1>
+  <p id="status-msg" style="font-size:28px;">Please wait for the resources to be loaded</p>
+  <div id="loading">🔄 Loading: <span id="progress">0%</span></div>
 
+  <div id="experiment" style="display:none;">
+    <canvas id="canvas" width="600"></canvas>
+    <p id="msg">Preparing ...</p>
+  </div>
+
+  <div id="end-screen" style="display:none;">
+    ✅ Experiment completed. Thanks for your participation! Redirecting to Prolific...
+  </div>
+
+  <script>
+    // 获取 URL 参数
+    function getQueryParams() {
+      const params = {};
+      const queryString = window.location.search.slice(1);
+      const pairs = queryString.split("&");
+      for (const pair of pairs) {
+        const [key, value] = pair.split("=");
+        if (key) {
+          params[decodeURIComponent(key)] = decodeURIComponent(value || "");
+        }
+      }
+      return params;
+    }
+    
+    // 获取所有 URL 参数（包括 Prolific 参数和其他）
+    const queryParams = getQueryParams();
+    const referrer = document.referrer || "direct";
+    
+    // 自动记录所有查询参数（不只是 Prolific 的特定参数）
+    const participantInfo = {
+      referrer: referrer,
+      queryParams: JSON.stringify(queryParams) // 把整个 queryParams 对象转为字符串
+    };
+    
+    console.log(participantInfo);  // 可查看提取的所有参数
+    
+    const userId = "user_" + Math.random().toString(36).substr(2, 8);
+    let imagePairs = [];
+    let allPreloadedImages = [];
+    let imagesReady = false;
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const msg = document.getElementById('msg');
+    const endScreen = document.getElementById('end-screen');
+    const loadingEl = document.getElementById('loading');
+    const statusEl = document.getElementById('status-msg');
+    const progressEl = document.getElementById('progress');
+    let current = 0;
+    let currentImg = new Image();
+    let startTime = 0;
+
+    async function preloadImages() {
+      const categories = ["ec", "sm", "st"];
+      const selectedPairs = [];
+    
+      // 逐类加载
+      async function loadCategory(folder) {
+        const res = await fetch(`img_${folder}/image_list.json`);
+        const files = await res.json();
+    
+        // 按 prefix 分组（例如 a1, a2...）
+        const groups = {};
+        files.forEach(filename => {
+          const prefix = filename.split('.')[0].split('_')[0];
+          if (!groups[prefix]) groups[prefix] = [];
+          groups[prefix].push(filename);
+        });
+        // ✅ 打印每组的前缀和内容
+        console.log(`===== ${folder} 文件夹中的分组结果 =====`);
+        for (const prefix in groups) {
+          console.log(`组前缀：${prefix}`);
+          console.log(`包含文件：`, groups[prefix]);
+        }
+        // 从每组中提取图像对
+        const pairs = [];
+        for (const prefix in groups) {
+          const group = groups[prefix];
+          if (group.length < 2) continue;
+
+          // ✅ 优先选取不含下划线的文件作为 baseImage
+          let baseImage = group.find(name => !name.includes('_'));
+      
+          // 如果没有无下划线的，选名字最短的作为兜底方案
+          if (!baseImage) {
+            baseImage = group.reduce((shortest, current) => {
+              return current.length < shortest.length ? current : shortest;
+            }, group[0]);
+          }
+          
+          const others = group.filter(f => f !== baseImage);
+          const otherImage = others[Math.floor(Math.random() * others.length)];
+          pairs.push([`img_${folder}/${otherImage}`, `img_${folder}/${baseImage}`]);
+        }
+    
+        // 从该类中随机选出2组
+        return getRandomItems(pairs, 5);
+      }
+    
+      // 从数组中随机抽取 count 个元素
+      function getRandomItems(arr, count) {
+        const copy = [...arr];
+        const result = [];
+        for (let i = 0; i < count && copy.length > 0; i++) {
+          const idx = Math.floor(Math.random() * copy.length);
+          result.push(copy.splice(idx, 1)[0]);
+        }
+        return result;
+      }
+    
+      // 逐个文件夹加载图像对
+      for (const c of categories) {
+        const pairs = await loadCategory(c);
+        selectedPairs.push(...pairs);
+      }
+    
+      // 生成最终的图像对
+      imagePairs = selectedPairs;
+    
+      // 预加载所有图像并显示进度
+      let loaded = 0;
+      const total = imagePairs.length * 2; // 每对图像包含两个文件
+      const preloadPromises = [];
+    
+      imagePairs.flat().forEach(src => {
+        const img = new Image();
+        const p = new Promise(resolve => {
+          img.onload = () => {
+            loaded++;
+            progressEl.textContent = Math.round((loaded / total) * 100) + "%";
+            resolve();
+          };
+          img.onerror = resolve;
+          img.src = src;
+          allPreloadedImages.push(img);
+        });
+        preloadPromises.push(p);
+      });
+    
+      await Promise.all(preloadPromises);
+      imagesReady = true;
+      loadingEl.style.display = "none";
+      statusEl.textContent = "Loading finished. Please click anywhere to start.";
+      statusEl.style.cursor = "pointer";
+    }
+
+
+    preloadImages();
+
+    // 修改为点击任意位置开始实验
+    document.addEventListener('click', function handleClick(e) {
+      if (imagesReady) {
+        document.removeEventListener('click', handleClick);
+        statusEl.style.display = 'none';
+        document.getElementById('experiment').style.display = 'block';
+        nextImage();
+      }
+    });
+
+    function nextImage() {
+      if (current >= imagePairs.length) {
+        document.getElementById('experiment').style.display = 'none';
+        endScreen.style.display = 'block';
+
+        setTimeout(() => {
+        window.location.href = "https://app.prolific.com/submissions/complete?cc=C1OH8WG7";
+        }, 1000);
+  
+        return;
+      }
+
+      const [imgA, imgB] = imagePairs[current];
+      currentImg = new Image();
+      currentImg.onload = () => {
+        // 获取原始图片的宽高
+        const originalWidth = currentImg.width;
+        const originalHeight = currentImg.height;
+
+        // 设置统一的高度
+        const unifiedHeight = 1000;
+        const scale = unifiedHeight / originalHeight;
+        const unifiedWidth = originalWidth * scale;
+
+        // 调整画布大小
+        canvas.width = unifiedWidth;
+        canvas.height = unifiedHeight;
+
+        // 绘制图片
+        ctx.drawImage(currentImg, 0, 0, unifiedWidth, unifiedHeight);
+        msg.innerText = `${current + 1}/15`;
+
+        setTimeout(() => {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          msg.innerText = "Loading...";
+          setTimeout(() => {
+            currentImg = new Image();
+            currentImg.onload = () => {
+              ctx.drawImage(currentImg, 0, 0, unifiedWidth, unifiedHeight);
+              msg.innerText = "Click the changed area";
+              startTime = performance.now();
+              canvas.onclick = recordClick;
+            };
+            currentImg.onerror = () => {
+              msg.innerText = "❌ Loading failed";
+              console.error("Loading failed：", imgB);
+            };
+            currentImg.src = imgB;
+          }, 200); // ⬅️ 控制pair中的第一张图和第二张图间隔时长
+        }, 2000); // ⬅️ 控制pair中的第一张图显示时长
+      };
+      currentImg.src = imgA;
+    }
+
+    function recordClick(e) {      
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.round(e.clientX - rect.left);
+      const y = Math.round(e.clientY - rect.top);
+      const elapsed = Math.round(performance.now() - startTime);
+
+      ctx.fillStyle = "red";
+      ctx.beginPath();
+      ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.fill();
+
+      const imageData = canvas.toDataURL("image/png");
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const pairIndex = current + 1;
+      const fileName = `${userId}_pair${pairIndex}_${timestamp}.png`;
+
+      const payload = {
+        imageData,
+        fileName,
+        userId,
+        experimentId: pairIndex,
+        pairIndex,
+        timestamp: new Date().toLocaleString(),
+        clickedX: x,
+        clickedY: y,
+        timeMs: elapsed,
+        imageA: imagePairs[current][0],
+        imageB: imagePairs[current][1],
+        // 添加参与者元信息
+        referrer: participantInfo.referrer,
+        queryParams: participantInfo.queryParams
+      };
+
+      console.log("Sending payload:", payload);
+      
+      fetch("https://script.google.com/macros/s/AKfycby88M0KVbC5OeLttT0KofbQBNNgrsHEcRRUHeauhzZedR_BmbquifV6aUM-sM3GuhDs/exec", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      }).catch((err) => {
+        console.warn("Uploading failed (silent)", err);
+      });
+
+      canvas.onclick = null;
+      current++;
+      setTimeout(nextImage, 500);
+    }
+  </script>
+</body>
+</html>
